@@ -4,8 +4,10 @@ import { moveItem, resizeQuestions } from '../domain/workspace'
 import { errorMessage, isText, normalizeChoices } from '../domain/validation'
 import { ChoicesEditor } from './ChoicesEditor'
 import { ErrorNotice, Icon, Modal } from './Primitives'
+import { ChoiceSelector } from './ChoiceSelector'
+import { selectedChoices } from '../domain/templates'
 
-export interface SettingsDraft { sheet: Sheet; count: string; templateId: string }
+export interface SettingsDraft { sheet: Sheet; count: string; templateId: string; customChoices: string[] }
 
 function QuestionEditor({ question, onSave, onClose }: { question: Question; onSave: (question: Question) => void; onClose: () => void }) {
   const [label, setLabel] = useState(question.label)
@@ -30,18 +32,23 @@ function QuestionEditor({ question, onSave, onClose }: { question: Question; onS
 export function SheetSettings({ draft, templates, dirty, onChange, onSave }: { draft: SettingsDraft; templates: ChoiceTemplate[]; dirty: boolean; onChange: (draft: SettingsDraft) => void; onSave: () => void }) {
   const [editing, setEditing] = useState<Question | null>(null)
   const [error, setError] = useState('')
-  const template = templates.find((t) => t.id === draft.templateId) ?? templates[0]
+  const choices = selectedChoices(templates, draft.templateId, draft.customChoices)
   const updateQuestions = (questions: Question[]) => onChange({ ...draft, sheet: { ...draft.sheet, questions }, count: String(questions.length) })
   function resize() {
-    try { updateQuestions(resizeQuestions(draft.sheet.questions, Number(draft.count), template.choices)); setError('') } catch (error) { setError(errorMessage(error)) }
+    try { updateQuestions(resizeQuestions(draft.sheet.questions, Number(draft.count), choices)); setError('') } catch (error) { setError(errorMessage(error)) }
   }
   return <div className="stack">
     <div className="section-heading"><div><h2>シート設定</h2><p>編集内容は「変更を保存」で確定します。</p></div><span className={`tag ${dirty ? 'tag-amber' : ''}`}>{dirty ? '未保存の変更あり' : '保存済みの構成'}</span></div>
     <section className="panel settings-controls"><div className="form-columns">
       <label className="field">シート名<input value={draft.sheet.title} onChange={(event) => onChange({ ...draft, sheet: { ...draft.sheet, title: event.target.value } })} /></label>
       <div className="field"><label htmlFor="edit-count">問題数</label><div className="input-with-button"><input id="edit-count" type="number" min="1" max="10000" step="1" value={draft.count} onChange={(event) => onChange({ ...draft, count: event.target.value })} /><button type="button" className="button" onClick={resize}>問題数を反映</button></div></div>
-    </div><div className="common-template"><label className="field">共通の選択肢<select value={template.id} onChange={(event) => onChange({ ...draft, templateId: event.target.value })}>{templates.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}</select></label>
-      <button className="button" onClick={() => updateQuestions(draft.sheet.questions.map((q) => ({ ...q, choices: [...template.choices] })))}>全問に適用</button><p className="helper">個別に編集した選択肢も置き換わります。</p></div></section>
+    </div><div className="common-template"><ChoiceSelector label="共通の選択肢" templates={templates} templateId={draft.templateId} customChoices={draft.customChoices} onTemplate={(templateId) => onChange({ ...draft, templateId })} onCustom={(customChoices) => onChange({ ...draft, customChoices })} />
+      <button className="button" onClick={() => {
+        try {
+          const normalized = normalizeChoices(choices)
+          updateQuestions(draft.sheet.questions.map((q) => ({ ...q, choices: [...normalized] }))); setError('')
+        } catch (error) { setError(errorMessage(error)) }
+      }}>全問に適用</button><p className="helper">個別に編集した選択肢も置き換わります。</p></div></section>
     {error && <ErrorNotice message={error} />}
     <section className="panel"><div className="panel-heading"><h3>問題の構成 <span className="count-label">{draft.sheet.questions.length}問</span></h3><span className="muted">番号・選択肢・並び順</span></div>
       <ol className="question-settings-list">{draft.sheet.questions.map((q, index) => <li key={q.id} className="question-setting">
@@ -52,7 +59,7 @@ export function SheetSettings({ draft, templates, dirty, onChange, onSave }: { d
           <button className="icon-button" disabled={draft.sheet.questions.length === 1} aria-label={`問題 ${q.label} を削除`} onClick={() => updateQuestions(draft.sheet.questions.filter((item) => item.id !== q.id))}><Icon name="trash" /></button></div>
       </li>)}</ol>
       <div className="panel-bottom"><button className="button button-subtle" onClick={() => {
-        try { updateQuestions(resizeQuestions(draft.sheet.questions, draft.sheet.questions.length + 1, template.choices)) } catch (error) { setError(errorMessage(error)) }
+        try { updateQuestions(resizeQuestions(draft.sheet.questions, draft.sheet.questions.length + 1, choices)) } catch (error) { setError(errorMessage(error)) }
       }}><Icon name="plus" />問題を追加</button></div>
     </section>
     <div className="settings-save"><p className="helper">解答や正答が消える場合は、保存前に対象の問題を確認できます。</p><button className="button button-primary" disabled={!dirty} onClick={onSave}><Icon name="check" />変更を保存</button></div>

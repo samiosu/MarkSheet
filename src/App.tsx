@@ -13,7 +13,7 @@ import { downloadAnswers, readAnswerFile } from './domain/files'
 import { toAnswerFile } from './domain/answerImport'
 import { initialState, reducer } from './domain/state'
 import { loadData, saveData, STORAGE_KEY } from './domain/storage'
-import { BUILTIN_TEMPLATES } from './domain/templates'
+import { BUILTIN_TEMPLATES, selectedChoices } from './domain/templates'
 import type { DocumentKind, Workspace } from './domain/types'
 import { resizeQuestions, structureImpacts, updateSheet } from './domain/workspace'
 import { errorMessage } from './domain/validation'
@@ -77,7 +77,7 @@ export default function App() {
   const onInvalid = useCallback((id: string, invalid: boolean) => setInvalidPointIds((ids) => invalid ? ids.includes(id) ? ids : [...ids, id] : ids.filter((item) => item !== id)), [])
 
   function openTab(next: Tab) {
-    if (next === 'settings' && workspace) setDraft({ sheet: workspace.sheet, count: String(workspace.sheet.questions.length), templateId: templates[0].id })
+    if (next === 'settings' && workspace) setDraft({ sheet: workspace.sheet, count: String(workspace.sheet.questions.length), templateId: templates[0].id, customChoices: ['', ''] })
     else setDraft(null)
     setInvalidPointIds([])
     setTab(next)
@@ -112,7 +112,7 @@ export default function App() {
   function saveSettings() {
     if (!workspace || !draft) return
     try {
-      const choices = (templates.find((t) => t.id === draft.templateId) ?? templates[0]).choices
+      const choices = selectedChoices(templates, draft.templateId, draft.customChoices)
       const sheet = { ...draft.sheet, title: draft.sheet.title.trim(), questions: resizeQuestions(draft.sheet.questions, Number(draft.count), choices) }
       const updated = updateSheet(workspace, sheet)
       const impacts = structureImpacts(workspace, sheet)

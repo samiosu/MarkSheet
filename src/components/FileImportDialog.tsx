@@ -1,8 +1,10 @@
 import { useState } from 'react'
 import type { AnswerFile, ChoiceTemplate, DocumentKind, Workspace } from '../domain/types'
 import { assertAnswersMatch, importAnswers, newWorkspaceFromAnswers } from '../domain/answerImport'
-import { errorMessage, isText } from '../domain/validation'
+import { errorMessage, isText, normalizeChoices } from '../domain/validation'
 import { ErrorNotice, Modal } from './Primitives'
+import { ChoiceSelector } from './ChoiceSelector'
+import { selectedChoices } from '../domain/templates'
 
 export interface PendingImport {
   filename: string
@@ -23,14 +25,16 @@ export function FileImportDialog({ input, workspace, templates, onClose, onImpor
   const [templateId, setTemplateId] = useState(() => (
     templates.find((template) => input.records.every((record) => record.answer === null || template.choices.includes(record.answer))) ?? templates[0]
   ).id)
+  const [customChoices, setCustomChoices] = useState(['', ''])
   const [submitError, setSubmitError] = useState('')
-  const template = templates.find((item) => item.id === templateId) ?? templates[0]
+  const choices = selectedChoices(templates, templateId, customChoices)
   const useCurrent = target === 'current' && workspace !== null
   const noun = kind === 'responses' ? '解答' : '正答'
   let validationError = ''
   try {
     if (!useCurrent && !isText(title)) throw new Error('シート名を入力してください。')
-    assertAnswersMatch(input.records, useCurrent ? workspace.sheet.questions : input.records.map(({ label }) => ({ label, choices: template.choices })))
+    const normalized = useCurrent ? [] : normalizeChoices(choices)
+    assertAnswersMatch(input.records, useCurrent ? workspace.sheet.questions : input.records.map(({ label }) => ({ label, choices: normalized })))
   } catch (error) { validationError = errorMessage(error) }
 
   return <Modal title="ファイルの読込を確認" onClose={onClose}>
@@ -38,7 +42,7 @@ export function FileImportDialog({ input, workspace, templates, onClose, onImpor
       event.preventDefault()
       if (validationError) return
       try {
-        const next = useCurrent ? importAnswers(workspace, kind, input.records) : newWorkspaceFromAnswers(input.records, kind, title, template.choices)
+        const next = useCurrent ? importAnswers(workspace, kind, input.records) : newWorkspaceFromAnswers(input.records, kind, title, choices)
         onImport(next, kind)
       } catch (error) { setSubmitError(errorMessage(error)) }
     }}>
@@ -47,8 +51,7 @@ export function FileImportDialog({ input, workspace, templates, onClose, onImpor
       {workspace && <label className="field">読み込むシート<select value={target} onChange={(event) => setTarget(event.target.value)}><option value="current">現在のシート：{workspace.sheet.title}</option><option value="new">新しいシートとして開く</option></select></label>}
       {!useCurrent && <>
         <label className="field">シート名<input value={title} onChange={(event) => setTitle(event.target.value)} required /></label>
-        <label className="field">選択肢テンプレート<select value={templateId} onChange={(event) => setTemplateId(event.target.value)}>{templates.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
-        <div className="template-preview" aria-label="選択肢のプレビュー">{template.choices.map((choice) => <span key={choice}><i aria-hidden="true" />{choice}</span>)}</div>
+        <ChoiceSelector templates={templates} templateId={templateId} customChoices={customChoices} onTemplate={setTemplateId} onCustom={setCustomChoices} />
         <p className="helper">全問にこの選択肢を設定します。配点は1問1点で始め、正答タブで変更できます。</p>
       </>}
       <table className="import-preview"><caption>読込内容{input.records.length > 5 ? '（先頭5問）' : ''}</caption><thead><tr><th scope="col">問題番号</th><th scope="col">選択値</th></tr></thead><tbody>{input.records.slice(0, 5).map((record) => <tr key={record.label}><th scope="row">{record.label}</th><td>{record.answer ?? '未設定'}</td></tr>)}</tbody></table>

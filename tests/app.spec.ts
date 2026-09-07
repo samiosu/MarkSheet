@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises'
 import { expect, test } from '@playwright/test'
-import type { Page } from '@playwright/test'
+import type { Locator, Page } from '@playwright/test'
 import AxeBuilder from '@axe-core/playwright'
 import { samplePair } from '../src/domain/fixtures'
 import { parseFileText, serializeCsv, serializeJson } from '../src/domain/files'
@@ -18,6 +18,14 @@ test.beforeEach(async ({ page }) => {
 test.afterEach(async ({ page }) => { expect(pageErrors.get(page)).toEqual([]) })
 
 const recordsOf = (document: SheetDocument): AnswerFile => document.questions.map(({ label, answer }) => ({ label, answer }))
+
+async function enterCustomChoices(scope: Page | Locator, choices: string[], label = '選択肢テンプレート') {
+  await scope.getByRole('combobox', { name: label, exact: true }).selectOption({ label: '自由に入力（任意の選択肢）' })
+  for (let index = 0; index < choices.length; index++) {
+    if (index >= 2) await scope.getByRole('button', { name: '選択肢を追加', exact: true }).click()
+    await scope.getByLabel(`選択肢 ${index + 1}`, { exact: true }).fill(choices[index])
+  }
+}
 
 async function upload(page: Page, document: SheetDocument | AnswerFile, format: 'csv' | 'json' = 'json', expectedKind?: DocumentKind) {
   const name = expectedKind === 'responses' ? '解答' : expectedKind === 'answerKey' ? '正答' : ''
@@ -362,5 +370,72 @@ test('同じファイルを正答として選べ、新規シートへの切替�
   await expect(page.getByLabel('問題 問01 の配点')).toHaveValue('1')
   expect((await exported(page, '空の解答をJSONで出力')).document).toEqual(records.map((record) => ({ ...record, answer: null })))
   await page.getByRole('tab', { name: '解答', exact: true }).click()
+  await expect(page.getByRole('radio', { checked: true })).toHaveCount(0)
+})
+
+for (const count of [2, 3, 6]) {
+  test(`自由入力の${count}択で作成・採点・再読み込み`, async ({ page }, testInfo) => {
+    const choices = ['はい', 'いいえ', '保留', '01', '該当なし,その他', '長い選択肢も省略せず最後まで表示します'].slice(0, count)
+    await page.getByLabel('問題数', { exact: true }).fill('2')
+    await enterCustomChoices(page, choices)
+    if (count === 6) {
+      const axe = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21aa']).analyze()
+      expect(axe.violations).toEqual([])
+      await page.screenshot({ path: testInfo.outputPath('custom-choices.png'), fullPage: true })
+    }
+    await page.getByRole('button', { name: 'シートを作成', exact: true }).click()
+    await expect(row(page, '1').getByRole('radio')).toHaveCount(count)
+    await row(page, '1').getByRole('radio', { name: choices[count - 1], exact: true }).check()
+    await page.getByRole('tab', { name: '正答', exact: true }).click()
+    await row(page, '1', 'answerKey').getByRole('radio', { name: choices[count - 1], exact: true }).check()
+    await page.getByRole('button', { name: '採点する', exact: true }).click()
+    await expect(page.getByTestId('score')).toHaveText(/1\s*\/\s*1\s*点/)
+    await page.getByRole('tab', { name: '解答', exact: true }).click()
+    expect((await exported(page, '解答をCSVで出力')).document).toEqual([{ label: '1', answer: choices[count - 1] }, { label: '2', answer: null }])
+    await expect(page.getByRole('status').filter({ hasText: 'このブラウザーに保存済み' })).toBeVisible()
+    await page.reload()
+    await expect(row(page, '1').getByRole('radio')).toHaveCount(count)
+    await expect(row(page, '1').getByRole('radio', { name: choices[count - 1], exact: true })).toBeChecked()
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+  })
+}
+
+test('任意の6択を指定して外部ファイルを読み込み、空欄・重複を拒否する', async ({ page }) => {
+  const choices = ['A', 'B', 'C', 'D', 'E', 'F']
+  await page.getByLabel('ファイルを選択', { exact: true }).setInputFiles({ name: '外部.csv', mimeType: 'text/csv', buffer: Buffer.from('label,answer\n1,F\n2,') })
+  const dialog = page.getByRole('dialog')
+  await dialog.getByRole('combobox', { name: '選択肢テンプレート', exact: true }).selectOption({ label: '自由に入力（任意の選択肢）' })
+  await expect(dialog.getByRole('button', { name: '読み込みを確定' })).toBeDisabled()
+  await enterCustomChoices(dialog, choices)
+  await dialog.getByLabel('選択肢 2', { exact: true }).fill('A')
+  await expect(dialog.getByRole('alert')).toContainText('重複')
+  await expect(dialog.getByRole('button', { name: '読み込みを確定' })).toBeDisabled()
+  await dialog.getByLabel('選択肢 2', { exact: true }).fill('B')
+  await dialog.getByRole('button', { name: '選択肢 6 を上へ', exact: true }).click()
+  await dialog.getByRole('button', { name: '読み込みを確定', exact: true }).click()
+  await expect(row(page, '1').getByRole('radio')).toHaveCount(6)
+  await expect(row(page, '1').getByRole('radio').nth(4)).toHaveAttribute('value', 'F')
+  await expect(row(page, '1').getByRole('radio', { name: 'F', exact: true })).toBeChecked()
+  await page.getByRole('tab', { name: '正答', exact: true }).click()
+  await upload(page, [{ label: '1', answer: 'F' }, { label: '2', answer: null }], 'json', 'answerKey')
+  await page.getByRole('button', { name: '採点する', exact: true }).click()
+  await expect(page.getByTestId('accuracy')).toHaveText('100.0%')
+})
+
+test('共通の自由入力を全問・追加問題に適用し、選択肢の削除を確認する', async ({ page }) => {
+  await page.getByLabel('問題数', { exact: true }).fill('1')
+  await page.getByRole('button', { name: 'シートを作成', exact: true }).click()
+  await row(page, '1').getByRole('radio', { name: '4', exact: true }).check()
+  await page.getByRole('tab', { name: 'シート設定', exact: true }).click()
+  await enterCustomChoices(page, ['正しい', '誤り', 'わからない'], '共通の選択肢')
+  await page.getByRole('button', { name: '選択肢 3 を削除', exact: true }).click()
+  await page.getByRole('button', { name: '全問に適用', exact: true }).click()
+  await page.getByRole('button', { name: '問題を追加', exact: true }).click()
+  await page.getByRole('button', { name: '変更を保存', exact: true }).click()
+  await expect(page.getByRole('dialog')).toContainText('解答「4」を未回答')
+  await page.getByRole('button', { name: '確認して変更を保存', exact: true }).click()
+  await page.getByRole('tab', { name: '解答', exact: true }).click()
+  await expect(row(page, '1').getByRole('radio')).toHaveCount(2)
+  await expect(row(page, '2').getByRole('radio')).toHaveCount(2)
   await expect(page.getByRole('radio', { checked: true })).toHaveCount(0)
 })
