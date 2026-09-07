@@ -1,12 +1,6 @@
-{
-  "schemaVersion": 1,
-  "kind": "responses",
-  "sheetId": "marksheet-sample-001",
-  "title": "練習問題",
-  "questions": [
-    { "id": "q1", "label": "1", "choices": ["ア", "イ", "ウ", "エ"], "answer": "ア" },
-    { "id": "q2", "label": "2", "choices": ["ア", "イ", "ウ", "エ"], "answer": "ウ" },
-    { "id": "q3", "label": "3", "choices": ["ア", "イ", "ウ", "エ"], "answer": null },
-    { "id": "q4", "label": "4", "choices": ["ア", "イ", "ウ", "エ"], "answer": "ア" }
-  ]
-}
+[
+  { "label": "1", "answer": "ア" },
+  { "label": "2", "answer": "ウ" },
+  { "label": "3", "answer": null },
+  { "label": "4", "answer": "ア" }
+]

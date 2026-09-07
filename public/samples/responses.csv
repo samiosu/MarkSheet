@@ -1,5 +1,5 @@
-﻿schema_version,kind,sheet_id,title,question_id,question_label,choices_json,answer,points
-1,responses,marksheet-sample-001,練習問題,q1,1,"[""ア"",""イ"",""ウ"",""エ""]",ア,
-1,responses,marksheet-sample-001,練習問題,q2,2,"[""ア"",""イ"",""ウ"",""エ""]",ウ,
-1,responses,marksheet-sample-001,練習問題,q3,3,"[""ア"",""イ"",""ウ"",""エ""]",,
-1,responses,marksheet-sample-001,練習問題,q4,4,"[""ア"",""イ"",""ウ"",""エ""]",ア,
+﻿label,answer
+1,ア
+2,ウ
+3,
+4,ア

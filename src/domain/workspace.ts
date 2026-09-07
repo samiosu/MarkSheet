@@ -43,7 +43,7 @@ export function toDocument(workspace: Workspace, kind: DocumentKind, blank = fal
   }
 }
 
-/** 別シートの切替確認はUIで済ませてから呼ぶ。単一ファイルでも構成を復元可能。 */
+/** 内部保存データから作業を復元する。公開ファイルの読込はanswerImport.tsで行う。 */
 export function importDocument(current: Workspace | null, input: SheetDocument): Workspace {
   const document = validateDocument(input)
   const sameSheet = current?.sheet.sheetId === document.sheetId
