@@ -1,5 +1,13 @@
 export type DocumentKind = 'responses' | 'answerKey'
 
+/** CSV / JSONに含める公開データ。種別・構成・配点は画面で設定する。 */
+export interface AnswerRecord {
+  label: string
+  answer: string | null
+}
+
+export type AnswerFile = AnswerRecord[]
+
 export interface Question {
   id: string
   label: string
@@ -14,6 +22,7 @@ export interface KeyQuestion extends ResponseQuestion {
   points: number
 }
 
+/** ブラウザー保存と採点に使う内部形式。公開ファイルには出力しない。 */
 interface DocumentBase {
   schemaVersion: 1
   sheetId: string

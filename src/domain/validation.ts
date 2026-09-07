@@ -1,4 +1,4 @@
-import type { Question, SheetDocument } from './types'
+import type { AnswerFile, Question, SheetDocument } from './types'
 
 export interface ValidationIssue {
   path: string
@@ -52,7 +52,36 @@ export function normalizeChoices(choices: string[]): string[] {
   return normalized
 }
 
-/** ファイルの文字列は数値化・Unicode正規化せず、そのまま保持する。 */
+/** 公開ファイルはlabelとanswerだけ。空文字のanswerは未回答に統一する。 */
+export function validateAnswerFile(value: unknown): AnswerFile {
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new ValidationError([{ path: 'ファイル', message: 'labelとanswerを持つ配列に、問題を1問以上含めてください。' }])
+  }
+  const issues: ValidationIssue[] = []
+  const labels = new Set<string>()
+  const records: AnswerFile = []
+  value.forEach((item: unknown, index) => {
+    const path = `records[${index + 1}]`
+    if (!isRecord(item)) {
+      issues.push({ path, message: 'labelとanswerを持つオブジェクトが必要です。' })
+      return
+    }
+    for (const key of Object.keys(item)) {
+      if (key !== 'label' && key !== 'answer') issues.push({ path: `${path}.${key}`, message: '使用できる項目はlabelとanswerだけです。' })
+    }
+    if (!isText(item.label)) issues.push({ path: `${path}.label`, message: '空ではない文字列の問題番号が必要です。' })
+    else if (labels.has(item.label)) issues.push({ path: `${path}.label`, message: `問題番号「${item.label}」が重複しています。` })
+    else labels.add(item.label)
+    if (item.answer !== null && item.answer !== '' && !isText(item.answer)) {
+      issues.push({ path: `${path}.answer`, message: '選択値の文字列、または未回答を表すnull・空文字が必要です。' })
+    }
+    records.push({ label: item.label as string, answer: item.answer === '' ? null : item.answer as string | null })
+  })
+  if (issues.length) throw new ValidationError(issues)
+  return records
+}
+
+/** 内部保存データの文字列は数値化・Unicode正規化せず、そのまま保持する。 */
 export function validateDocument(value: unknown): SheetDocument {
   if (!isRecord(value)) {
     throw new ValidationError([{ path: 'ファイル', message: 'シートを表すオブジェクトが必要です。' }])

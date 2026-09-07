@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useReducer, useState } from 'react'
 import type { ReactNode } from 'react'
 import { AnswerEditor, FilePicker } from './components/AnswerEditor'
 import { NewSheetForm } from './components/NewSheetForm'
@@ -7,12 +7,15 @@ import { Results } from './components/Results'
 import { SheetSettings } from './components/SheetSettings'
 import type { SettingsDraft } from './components/SheetSettings'
 import { Templates } from './components/Templates'
-import { downloadDocument, readDocumentFile } from './domain/files'
+import { FileImportDialog } from './components/FileImportDialog'
+import type { PendingImport } from './components/FileImportDialog'
+import { downloadAnswers, readAnswerFile } from './domain/files'
+import { toAnswerFile } from './domain/answerImport'
 import { initialState, reducer } from './domain/state'
 import { loadData, saveData, STORAGE_KEY } from './domain/storage'
 import { BUILTIN_TEMPLATES } from './domain/templates'
 import type { DocumentKind, Workspace } from './domain/types'
-import { importDocument, resizeQuestions, structureImpacts, toDocument, updateSheet } from './domain/workspace'
+import { resizeQuestions, structureImpacts, updateSheet } from './domain/workspace'
 import { errorMessage } from './domain/validation'
 
 const TABS = [
@@ -31,6 +34,7 @@ export default function App() {
   const [tab, setTab] = useState<Tab>('responses')
   const [draft, setDraft] = useState<SettingsDraft | null>(null)
   const [confirmation, setConfirmation] = useState<Confirmation | null>(null)
+  const [pendingImport, setPendingImport] = useState<PendingImport | null>(null)
   const [newSheetOpen, setNewSheetOpen] = useState(false)
   const [helpOpen, setHelpOpen] = useState(false)
   const [error, setError] = useState('')
@@ -39,8 +43,6 @@ export default function App() {
   const [invalidPointIds, setInvalidPointIds] = useState<string[]>([])
   const [saved, setSaved] = useState({ revision: 0, failed: initial.failed, message: initial.message })
   const workspace = state.workspace
-  const liveWorkspace = useRef(workspace)
-  useEffect(() => { liveWorkspace.current = workspace }, [workspace])
   const templates = useMemo(() => [...BUILTIN_TEMPLATES, ...state.templates], [state.templates])
   const dirty = useMemo(() => Boolean(workspace && draft && (draft.count !== String(workspace.sheet.questions.length) || JSON.stringify(draft.sheet) !== JSON.stringify(workspace.sheet))), [workspace, draft])
 
@@ -98,23 +100,14 @@ export default function App() {
   async function importFile(file: File, expectedKind?: DocumentKind) {
     setBusy(true); setError('')
     try {
-      const document = await readDocumentFile(file)
-      if (expectedKind && expectedKind !== document.kind) throw new Error(`${expectedKind === 'responses' ? '解答' : '正答'}ファイルを選択してください。ファイル内の種別は「${document.kind === 'responses' ? '解答' : '正答'}」です。`)
-      const current = liveWorkspace.current
-      importDocument(current, document)
-      const noun = document.kind === 'responses' ? '解答' : '正答'
-      const different = current && current.sheet.sheetId !== document.sheetId
-      const empty = document.questions.filter((q) => q.answer === null).length
-      setConfirmation({ title: `${noun}ファイルを読み込む`, label: '読み込みを確定', body: <>
-        <dl className="import-summary"><div><dt>ファイル</dt><dd>{file.name}</dd></div><div><dt>種別</dt><dd>{noun}</dd></div><div><dt>シート名</dt><dd>{document.title}</dd></div><div><dt>問題数</dt><dd>{document.questions.length}問</dd></div><div><dt>{document.kind === 'responses' ? '未回答' : '正答未設定'}</dt><dd>{empty}問</dd></div></dl>
-        <p className="notice">{different ? '別シートを新しい作業として開きます。現在の解答・正答を置き換えるため、必要なデータはキャンセルして出力してください。' : current ? `現在の${noun}を置き換えます。${document.kind === 'responses' ? '正答と配点' : '解答'}は保持します。シート名と問題の表示順は現在の設定を使います。` : document.kind === 'answerKey' ? 'この正答から、全問未回答の解答シートも作成します。' : 'この解答からシートを復元します。正答は後から入力・読込できます。'}</p>
-      </>, action: () => { activateWorkspace(importDocument(liveWorkspace.current, document), document.kind); setNotice(`${noun}を読み込みました。${document.questions.length}問中、${empty}問が${document.kind === 'responses' ? '未回答' : '未設定'}です。`) } })
+      const records = await readAnswerFile(file)
+      setPendingImport({ filename: file.name, records, kind: expectedKind })
     } catch (error) { setError(errorMessage(error)) }
     finally { setBusy(false) }
   }
   function exportFile(kind: DocumentKind, format: 'csv' | 'json', blank = false) {
     if (!workspace) return
-    try { downloadDocument(toDocument(workspace, kind, blank), format); setNotice(`${blank ? '空の解答' : kind === 'responses' ? '解答' : '正答'}を${format.toUpperCase()}で出力しました。`) } catch (error) { setError(errorMessage(error)) }
+    try { downloadAnswers(toAnswerFile(workspace, kind, blank), format, workspace.sheet.title, kind); setNotice(`${blank ? '空の解答' : kind === 'responses' ? '解答' : '正答'}を${format.toUpperCase()}で出力しました。`) } catch (error) { setError(errorMessage(error)) }
   }
   function saveSettings() {
     if (!workspace || !draft) return
@@ -158,7 +151,7 @@ export default function App() {
           <div className="paper-preview" aria-hidden="true"><div className="preview-header"><span>今日の学習シート</span><span className="preview-dots">•••</span></div>{[1, 2, 3, 4].map((number) => <div className="preview-row" key={number}><span>{String(number).padStart(2, '0')}</span>{['ア', 'イ', 'ウ', 'エ'].map((choice, i) => <span key={choice} className={`preview-mark ${i === [1, 0, 2, -1][number - 1] ? 'filled' : ''}`}>{choice}</span>)}</div>)}<div className="preview-footer"><span className="blue-dot" />一問ずつ、着実に。</div></div>
         </section>
         <div className="welcome-panels"><section className="panel create-panel"><div className="panel-title"><span className="section-icon"><Icon name="plus" /></span><div><h2>新しいシートを作る</h2><p>まずは問題数と選択肢を決めましょう。</p></div></div><NewSheetForm templates={templates} onCreate={create} /></section>
-          <div className="welcome-side"><section className="panel import-panel"><div className="section-icon"><Icon name="upload" /></div><h2>ファイルから始める</h2><p>保存した解答や正答を読み込んで、<br />続きから学習できます。</p><FilePicker onFile={importFile} disabled={busy} /><span className="file-format-note">対応形式：CSV / JSON</span></section><section className="template-callout"><Icon name="grid" /><div><h3>自分だけの選択肢も</h3><p>A・B・C、○・×など自由に作成。</p><button className="text-button" onClick={() => navigate('templates')}>テンプレートを管理<Icon name="arrow" /></button></div></section></div></div>
+          <div className="welcome-side"><section className="panel import-panel"><div className="section-icon"><Icon name="upload" /></div><h2>ファイルから始める</h2><p>解答や正答を読み込み、<br />選択肢を設定して始められます。</p><FilePicker onFile={importFile} disabled={busy} /><span className="file-format-note">対応形式：CSV / JSON（label・answer）</span></section><section className="template-callout"><Icon name="grid" /><div><h3>自分だけの選択肢も</h3><p>A・B・C、○・×など自由に作成。</p><button className="text-button" onClick={() => navigate('templates')}>テンプレートを管理<Icon name="arrow" /></button></div></section></div></div>
       </> : <>
         <section className="workspace-heading"><div><span className="eyebrow">{workspace ? '学習シート' : 'あなたの選択肢'}</span><h1>{workspace?.sheet.title ?? 'テンプレート'}</h1>{workspace && <div className="workspace-meta"><span>{total}問</span><span>単一選択</span><span className="save-status" role="status"><i className={saved.failed ? 'status-error' : ''} />{saveText}</span></div>}</div><div className="button-row">{workspace ? <><button className="button" onClick={() => setNewSheetOpen(true)}><Icon name="plus" />新規シート</button><button className="button button-primary" disabled={invalidPointIds.length > 0} onClick={requestGrading}><Icon name="chart" />採点する</button></> : <button className="button" onClick={() => navigate('responses')}>シート作成に戻る</button>}</div></section>
         {workspace && <div className="tabs" role="tablist" aria-label="作業モード">{TABS.map((item, index) => <button key={item.id} id={`tab-${item.id}`} role="tab" aria-selected={tab === item.id} aria-controls={`panel-${item.id}`} tabIndex={tab === item.id ? 0 : -1} onClick={() => navigate(item.id)} onKeyDown={(event) => {
@@ -180,6 +173,9 @@ export default function App() {
     </main>
     <footer className="app-footer"><span>MarkSheet <span className="footer-divider">/</span> 学びの記録を、手元に。</span>{!workspace && <span role="status">{saveText}</span>}<button className="text-button" onClick={() => setConfirmation({ title: '保存データを削除しますか？', body: <p>このアプリの現在のシート・解答・正答・自作テンプレートを削除します。必要な解答・正答は、キャンセルして出力してください。</p>, label: '保存データを削除', danger: true, action: () => { localStorage.removeItem(STORAGE_KEY); dispatch({ type: 'reset' }); setDraft(null); setInvalidPointIds([]); setTab('responses'); setNotice('保存データを削除しました。') } })}>保存データを削除</button></footer>
     {newSheetOpen && <Modal title="新しいシートを作る" onClose={() => setNewSheetOpen(false)}><NewSheetForm templates={templates} onCreate={create} /></Modal>}
+    {pendingImport && <FileImportDialog input={pendingImport} workspace={workspace} templates={templates} onClose={() => setPendingImport(null)} onImport={(next, kind) => {
+      activateWorkspace(next, kind); setPendingImport(null); setNotice(`${kind === 'responses' ? '解答' : '正答'}を${next.sheet.questions.length}問読み込みました。`)
+    }} />}
     {helpOpen && <Modal title="MarkSheet の使い方" onClose={() => setHelpOpen(false)}><ol className="help-steps"><li><strong>シートを作る</strong><p>問題数と選択肢を指定。問題文はお手元の教材を参照してください。</p></li><li><strong>解答をマークする</strong><p>丸いマークかラベルを選択。Tabで移動し、矢印キーで選択を切り替えられます。</p></li><li><strong>正答を用意して採点する</strong><p>正答タブで正答と配点を設定するか、同じシートの正答ファイルを読み込みます。</p></li><li><strong>ファイルで保存・再利用</strong><p>解答と正答は個別にCSV／JSONで出力できます。正答タブから空の解答シートを配布すると、同じ問題として照合できます。</p></li></ol><p className="helper">自動保存はこのブラウザー限定です。別端末とは同期されません。</p><div className="sample-links"><span>サンプル：</span>{['responses', 'answerKey'].flatMap((kind) => ['json', 'csv'].map((format) => <a key={`${kind}-${format}`} href={`${import.meta.env.BASE_URL}samples/${kind}.${format}`} download>{kind === 'responses' ? '解答' : '正答'} {format.toUpperCase()}</a>))}</div></Modal>}
     {confirmation && <Modal title={confirmation.title} onClose={() => setConfirmation(null)}><div className="confirmation-body">{confirmation.body}</div><div className="modal-actions"><button className="button" autoFocus onClick={() => setConfirmation(null)}>キャンセル</button><button className={`button ${confirmation.danger ? 'button-danger' : 'button-primary'}`} onClick={() => {
       const action = confirmation.action

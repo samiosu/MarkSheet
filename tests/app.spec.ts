@@ -4,8 +4,9 @@ import type { Page } from '@playwright/test'
 import AxeBuilder from '@axe-core/playwright'
 import { samplePair } from '../src/domain/fixtures'
 import { parseFileText, serializeCsv, serializeJson } from '../src/domain/files'
-import type { DocumentKind, SheetDocument } from '../src/domain/types'
-import { STORAGE_KEY } from '../src/domain/storage'
+import type { AnswerFile, DocumentKind, SheetDocument } from '../src/domain/types'
+import { encodeData, STORAGE_KEY } from '../src/domain/storage'
+import { importDocument } from '../src/domain/workspace'
 
 const pageErrors = new WeakMap<Page, string[]>()
 test.beforeEach(async ({ page }) => {
@@ -16,17 +17,30 @@ test.beforeEach(async ({ page }) => {
 })
 test.afterEach(async ({ page }) => { expect(pageErrors.get(page)).toEqual([]) })
 
-async function upload(page: Page, document: SheetDocument, format: 'csv' | 'json' = 'json', expectedKind?: DocumentKind) {
+const recordsOf = (document: SheetDocument): AnswerFile => document.questions.map(({ label, answer }) => ({ label, answer }))
+
+async function upload(page: Page, document: SheetDocument | AnswerFile, format: 'csv' | 'json' = 'json', expectedKind?: DocumentKind) {
   const name = expectedKind === 'responses' ? '解答' : expectedKind === 'answerKey' ? '正答' : ''
-  await page.getByLabel(`${name}ファイルを選択`, { exact: true }).setInputFiles({ name: `sheet.${format}`, mimeType: format === 'csv' ? 'text/csv' : 'application/json', buffer: Buffer.from(format === 'csv' ? serializeCsv(document) : serializeJson(document)) })
-  await expect(page.getByRole('dialog')).toBeVisible()
+  const records = Array.isArray(document) ? document : recordsOf(document)
+  const title = Array.isArray(document) ? '練習問題' : document.title
+  await page.getByLabel(`${name}ファイルを選択`, { exact: true }).setInputFiles({ name: `${title}.${format}`, mimeType: format === 'csv' ? 'text/csv' : 'application/json', buffer: Buffer.from(format === 'csv' ? serializeCsv(records) : serializeJson(records)) })
+  const dialog = page.getByRole('dialog')
+  await expect(dialog).toBeVisible()
+  if (await dialog.getByRole('combobox', { name: '読込先', exact: true }).count()) await dialog.getByRole('combobox', { name: '読込先', exact: true }).selectOption(expectedKind ?? (Array.isArray(document) ? 'responses' : document.kind))
+  if (!Array.isArray(document) && await dialog.getByRole('combobox', { name: '選択肢テンプレート', exact: true }).count()) {
+    await dialog.getByRole('combobox', { name: '選択肢テンプレート', exact: true }).selectOption(document.questions[0].choices[0] === 'ア' ? 'builtin-katakana' : 'builtin-numbers')
+  }
   await page.getByRole('button', { name: '読み込みを確定', exact: true }).click()
+  await expect(dialog).toHaveCount(0)
 }
 
 async function seed(page: Page) {
   const { responses } = samplePair()
   responses.questions.forEach((q) => { q.answer = null })
   await upload(page, responses)
+  await page.getByRole('tab', { name: '正答', exact: true }).click()
+  for (const q of samplePair().answerKey.questions) await page.getByLabel(`問題 ${q.label} の配点`).fill(String(q.points))
+  await page.getByRole('tab', { name: '解答', exact: true }).click()
 }
 
 const row = (page: Page, label: string, kind: DocumentKind = 'responses') => page.getByRole('group', { name: `問題 ${label} の${kind === 'responses' ? '解答' : '正答'}`, exact: true })
@@ -57,7 +71,8 @@ test('新規作成・マーク・解除・JSON往復・再読み込み', async (
   await row(page, '2').getByRole('radio', { name: '3', exact: true }).check()
   await row(page, '2').getByRole('button', { name: '問題 2 の解答を消す' }).click()
   const file = await exported(page, '解答をJSONで出力')
-  expect(file.document.questions.map((q) => q.answer)).toEqual(['2', null, null, null])
+  expect(file.document.map((q) => q.answer)).toEqual(['2', null, null, null])
+  expect(JSON.parse(file.text).every((q: object) => Object.keys(q).sort().join(',') === 'answer,label')).toBe(true)
   await expect(page.getByRole('status').filter({ hasText: 'このブラウザーに保存済み' })).toBeVisible()
   await page.reload()
   await expect(row(page, '1').getByRole('radio', { name: '2', exact: true })).toBeChecked()
@@ -96,23 +111,24 @@ test('正答先行・空の解答配布・CSV往復', async ({ page }) => {
   await expect(page.getByText('正答を編集中', { exact: true })).toBeVisible()
   const file = await exported(page, '空の解答をCSVで出力')
   expect(file.text.charCodeAt(0)).toBe(0xfeff)
-  expect(file.document.kind).toBe('responses')
-  expect(file.document.questions.every((q) => q.answer === null && !('points' in q))).toBe(true)
+  expect(file.text.split('\r\n')[0]).toBe('\uFEFFlabel,answer')
+  expect(file.document.every((q) => q.answer === null && Object.keys(q).sort().join(',') === 'answer,label')).toBe(true)
   await page.getByRole('tab', { name: '解答', exact: true }).click()
   await upload(page, file.document, 'csv', 'responses')
   await row(page, '1').getByRole('radio', { name: 'ア', exact: true }).check()
   await page.getByRole('button', { name: '採点する', exact: true }).click()
-  await expect(page.getByTestId('score')).toHaveText(/2\s*\/\s*6\s*点/)
+  await expect(page.getByTestId('score')).toHaveText(/1\s*\/\s*3\s*点/)
 })
 
 test('ファイル不一致と破損では現在の作業を保持する', async ({ page }) => {
   await upload(page, samplePair().responses)
   await page.getByRole('tab', { name: '正答', exact: true }).click()
-  const mismatch = samplePair().answerKey
-  mismatch.questions[0].choices.reverse()
+  const mismatch = recordsOf(samplePair().answerKey)
+  mismatch[0].answer = 'オ'
   await page.getByLabel('正答ファイルを選択').setInputFiles({ name: 'bad.json', mimeType: 'application/json', buffer: Buffer.from(serializeJson(mismatch)) })
-  await expect(page.getByRole('alert')).toContainText('選択肢または選択肢の順序が異なります')
-  await expect(page.getByRole('dialog')).toHaveCount(0)
+  await expect(page.getByRole('alert')).toContainText('設定された選択肢にありません')
+  await expect(page.getByRole('button', { name: '読み込みを確定' })).toBeDisabled()
+  await page.getByRole('button', { name: 'キャンセル', exact: true }).click()
   await page.getByLabel('正答ファイルを選択').setInputFiles({ name: 'broken.csv', mimeType: 'text/csv', buffer: Buffer.from('broken') })
   await expect(page.getByRole('alert')).toContainText('CSVヘッダー')
   await page.getByRole('tab', { name: '解答', exact: true }).click()
@@ -121,9 +137,10 @@ test('ファイル不一致と破損では現在の作業を保持する', async
 
 test('別シートの読込キャンセルと全解答クリアのキャンセル', async ({ page }) => {
   await upload(page, samplePair().responses)
-  const other = { ...samplePair().responses, sheetId: 'another', title: '別の試験' }
+  const other = recordsOf(samplePair().responses)
   await page.getByLabel('解答ファイルを選択').setInputFiles({ name: 'other.json', mimeType: 'application/json', buffer: Buffer.from(serializeJson(other)) })
-  await expect(page.getByRole('dialog')).toContainText('別シート')
+  await page.getByRole('combobox', { name: '読み込むシート', exact: true }).selectOption('new')
+  await expect(page.getByRole('dialog')).toContainText('新しいシートに置き換えます')
   await page.getByRole('button', { name: 'キャンセル', exact: true }).click()
   await page.getByRole('button', { name: '全解答をクリア', exact: true }).click()
   await page.getByRole('button', { name: 'キャンセル', exact: true }).click()
@@ -131,7 +148,7 @@ test('別シートの読込キャンセルと全解答クリアのキャンセ�
   await expect(page.getByRole('heading', { name: '練習問題', exact: true })).toBeVisible()
 })
 
-test('構成変更は影響を確認してから反映しIDを維持する', async ({ page }) => {
+test('構成変更は影響を確認してから反映し番号と入力を維持する', async ({ page }) => {
   await upload(page, samplePair().responses)
   await page.getByRole('tab', { name: '正答', exact: true }).click()
   await upload(page, samplePair().answerKey, 'json', 'answerKey')
@@ -149,9 +166,9 @@ test('構成変更は影響を確認してから反映しIDを維持する', asy
   await page.getByRole('button', { name: '変更を保存', exact: true }).click()
   await page.getByRole('tab', { name: '解答', exact: true }).click()
   const file = await exported(page, '解答をJSONで出力')
-  expect(file.document.questions.map((q) => q.id)).toEqual(['q2', 'q1', 'q3', 'q4'])
-  expect(file.document.questions[1].answer).toBeNull()
-  expect(file.document.questions[0].answer).toBe('ウ')
+  expect(file.document.map((q) => q.label)).toEqual(['2', '1', '3', '4'])
+  expect(file.document[1].answer).toBeNull()
+  expect(file.document[0].answer).toBe('ウ')
 })
 
 test('自作テンプレートの作成・複製・削除とシートへのコピー', async ({ page }) => {
@@ -177,7 +194,8 @@ test('自作テンプレートの作成・複製・削除とシートへのコ�
   await page.getByRole('tab', { name: '解答', exact: true }).click()
   await expect(row(page, '1').getByRole('radio', { name: '01', exact: true })).toBeChecked()
   const file = await exported(page, '解答をCSVで出力')
-  expect(file.document.questions[0].choices).toEqual(['01', '正しい,と思う'])
+  expect(file.document[0]).toEqual({ label: '1', answer: '01' })
+  await expect(row(page, '1').getByRole('radio', { name: '正しい,と思う', exact: true })).toBeVisible()
 })
 
 test('キーボードで選択・解除し、入力変更で結果を無効化する', async ({ page }) => {
@@ -202,7 +220,7 @@ test('保存失敗でも入力とファイル出力ができる', async ({ page 
   await seed(page)
   await row(page, '1').getByRole('radio', { name: 'ア', exact: true }).check()
   await expect(page.getByRole('alert')).toContainText('自動保存できません')
-  expect((await exported(page, '解答をJSONで出力')).document.questions[0].answer).toBe('ア')
+  expect((await exported(page, '解答をJSONで出力')).document[0].answer).toBe('ア')
 })
 
 test('保存破損を通知して保持し、削除はアプリ専用データだけを対象にする', async ({ page }) => {
@@ -224,7 +242,10 @@ test('200問×10選択肢・長い文字列・reduced motion・外部送信な�
   page.on('request', (request) => { if (!request.url().startsWith('http://127.0.0.1:4173/')) external.push(request.url()) })
   const doc = samplePair().responses
   doc.questions = Array.from({ length: 200 }, (_, i) => ({ id: `q${i + 1}`, label: String(i + 1), choices: ['01', '1', 'ア', 'イ', 'ウ', 'エ', '○', '×', '長い選択肢でも折り返して全文を読むことができます', '<img src=x onerror=alert(1)>'], answer: null }))
-  await upload(page, doc)
+  const stored = encodeData({ workspace: importDocument(null, doc), templates: [] })
+  await page.evaluate(({ key, value }) => localStorage.setItem(key, value), { key: STORAGE_KEY, value: stored })
+  await page.reload()
+  await upload(page, recordsOf(doc), 'json', 'responses')
   await expect(page.getByRole('radio')).toHaveCount(2000)
   await row(page, '1').getByRole('radio', { name: '01', exact: true }).check()
   await row(page, '100').getByRole('radio', { name: '1', exact: true }).check()
@@ -234,7 +255,7 @@ test('200問×10選択肢・長い文字列・reduced motion・外部送信な�
   expect(await page.locator('.mark-choice').first().evaluate((element) => getComputedStyle(element).transitionDuration)).toBe('0s')
   await page.getByRole('heading', { name: '練習問題', exact: true }).scrollIntoViewIfNeeded()
   const exportedFile = await exported(page, '解答をCSVで出力')
-  expect(exportedFile.document.questions[199].answer).toBe('○')
+  expect(exportedFile.document[199].answer).toBe('○')
   expect(external).toEqual([])
   await page.screenshot({ path: testInfo.outputPath('large-sheet-viewport.png') })
 })
@@ -257,12 +278,14 @@ test('主要画面のアクセシビリティと横幅', async ({ page }, testIn
   await check()
 })
 
-test('正答と配点の出力復元、無効な配点の入力', async ({ page }) => {
+test('正答の出力再読込は配点を保持し、無効な配点を拒否する', async ({ page }) => {
   await seed(page)
   await markManually(page, 'answerKey')
   const json = await exported(page, '正答をJSONで出力')
   const csv = await exported(page, '正答をCSVで出力')
-  expect(json.document).toEqual(samplePair().answerKey)
+  expect(json.document).toEqual(recordsOf(samplePair().answerKey))
+  expect(JSON.parse(json.text).every((q: object) => Object.keys(q).sort().join(',') === 'answer,label')).toBe(true)
+  expect(csv.text.split('\r\n')[0]).toBe('\uFEFFlabel,answer')
   expect(csv.document).toEqual(json.document)
   const points = page.getByLabel('問題 1 の配点')
   await points.fill('0')
@@ -300,5 +323,5 @@ test('保存領域の削除が拒否されたときは現在の作業を保持�
   await page.getByRole('dialog').getByRole('button', { name: '保存データを削除', exact: true }).click()
   await expect(page.getByRole('alert')).toContainText('削除は拒否されました')
   await expect(row(page, '1').getByRole('radio', { name: 'ア', exact: true })).toBeChecked()
-  expect((await exported(page, '解答をJSONで出力')).document.questions[0].answer).toBe('ア')
+  expect((await exported(page, '解答をJSONで出力')).document[0].answer).toBe('ア')
 })
