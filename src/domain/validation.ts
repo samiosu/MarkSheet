@@ -52,8 +52,8 @@ export function normalizeChoices(choices: string[]): string[] {
   return normalized
 }
 
-/** 公開ファイルはlabelとanswerだけ。空文字のanswerは未回答に統一する。 */
-export function validateAnswerFile(value: unknown): AnswerFile {
+/** 公開ファイルはlabelとanswerを必須とし、正答形式だけpointsを許可する。空文字のanswerは未回答に統一する。 */
+export function validateAnswerFile(value: unknown, options: { allowPoints?: boolean } = {}): AnswerFile {
   if (!Array.isArray(value) || value.length === 0) {
     throw new ValidationError([{ path: 'ファイル', message: 'labelとanswerを持つ配列に、問題を1問以上含めてください。' }])
   }
@@ -67,7 +67,7 @@ export function validateAnswerFile(value: unknown): AnswerFile {
       return
     }
     for (const key of Object.keys(item)) {
-      if (key !== 'label' && key !== 'answer') issues.push({ path: `${path}.${key}`, message: '使用できる項目はlabelとanswerだけです。' })
+      if (key !== 'label' && key !== 'answer' && key !== 'points') issues.push({ path: `${path}.${key}`, message: '使用できる項目はlabel、answer、pointsだけです。' })
     }
     if (!isText(item.label)) issues.push({ path: `${path}.label`, message: '空ではない文字列の問題番号が必要です。' })
     else if (labels.has(item.label)) issues.push({ path: `${path}.label`, message: `問題番号「${item.label}」が重複しています。` })
@@ -75,9 +75,18 @@ export function validateAnswerFile(value: unknown): AnswerFile {
     if (item.answer !== null && item.answer !== '' && !isText(item.answer)) {
       issues.push({ path: `${path}.answer`, message: '選択値の文字列、または未回答を表すnull・空文字が必要です。' })
     }
-    records.push({ label: item.label as string, answer: item.answer === '' ? null : item.answer as string | null })
+    if (Object.hasOwn(item, 'points')) {
+      if (!options.allowPoints) issues.push({ path: `${path}.points`, message: '解答ファイルには配点を含められません。' })
+      else if (!isPoints(item.points)) issues.push({ path: `${path}.points`, message: '配点は安全に扱える正の整数にしてください。' })
+    }
+    records.push({ label: item.label as string, answer: item.answer === '' ? null : item.answer as string | null, ...(Object.hasOwn(item, 'points') ? { points: item.points as number } : {}) })
   })
   if (issues.length) throw new ValidationError(issues)
+  if (options.allowPoints) {
+    const withPoints = records.some((record) => Object.hasOwn(record, 'points'))
+    const withoutPoints = records.some((record) => !Object.hasOwn(record, 'points'))
+    if (withPoints && withoutPoints) throw new ValidationError([{ path: 'points', message: '配点を含める場合は、全問題に指定してください。' }])
+  }
   return records
 }
 

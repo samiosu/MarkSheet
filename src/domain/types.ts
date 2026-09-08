@@ -1,9 +1,10 @@
 export type DocumentKind = 'responses' | 'answerKey'
 
-/** CSV / JSONに含める公開データ。種別・構成・配点は画面で設定する。 */
+/** CSV / JSONに含める公開データ。正答ファイルだけ配点を任意で持てる。 */
 export interface AnswerRecord {
   label: string
   answer: string | null
+  points?: number
 }
 
 export type AnswerFile = AnswerRecord[]

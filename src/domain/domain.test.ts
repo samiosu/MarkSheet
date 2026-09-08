@@ -55,16 +55,22 @@ describe('公開形式とファイル往復', () => {
     for (const format of ['json', 'csv'] as const) {
       it(`${kind} / ${format} は日本語・引用符・改行・カンマ・先頭ゼロを保持する`, () => {
         const document = samplePair()[kind]
-        const records = recordsOf(document)
+        const records = kind === 'answerKey'
+          ? document.questions.map((question) => ({ label: question.label, answer: question.answer, points: 'points' in question ? question.points : 1 }))
+          : recordsOf(document)
         records.push(...['01', '1', 'カンマ,あり', '"引用"', '途中\n改行', '<img src=x onerror=alert(1)>', '=SUM(A1)'].map((answer, i) => ({ label: `00${i},"番号"\n続き`, answer })))
+        if (kind === 'answerKey') records.forEach((record) => { record.points ??= 1 })
         const output = format === 'csv' ? serializeCsv(records) : serializeJson(records)
         expect(parseFileText(output, `sheet.${format}`)).toEqual(records)
         expect(parseJson(serializeJson(parseCsv(serializeCsv(records))))).toEqual(records)
-        expect(parseFileText(output, `sheet.${format}`).every((record) => Object.keys(record).sort().join(',') === 'answer,label')).toBe(true)
+        expect(parseFileText(output, `sheet.${format}`).every((record) => Object.keys(record).sort().join(',') === (kind === 'answerKey' ? 'answer,label,points' : 'answer,label'))).toBe(true)
       })
       it(`配布サンプル ${kind}.${format} は形式仕様と採点例に一致する`, () => {
         const file = readFileSync(resolve('public', 'samples', `${kind}.${format}`), 'utf8')
-        expect(parseFileText(file, `sample.${format}`)).toEqual(recordsOf(samplePair()[kind]))
+        const expected = kind === 'answerKey'
+          ? samplePair().answerKey.questions.map((question) => ({ label: question.label, answer: question.answer, points: question.points }))
+          : recordsOf(samplePair().responses)
+        expect(parseFileText(file, `sample.${format}`)).toEqual(expected)
       })
     }
   }
@@ -93,9 +99,10 @@ describe('公開形式とファイル往復', () => {
   ])('CSVの%sを拒否する', (_, mutate) => {
     expect(() => parseCsv(mutate(serializeCsv(recordsOf(samplePair().answerKey))))).toThrow(ValidationError)
   })
-  it('旧形式、未知拡張子、JSON構文エラーを拒否する', () => {
-    expect(() => parseCsv('label,answer,points\n1,ア,2')).toThrow(/CSVヘッダー/)
-    expect(() => parseJson(JSON.stringify(samplePair().responses))).toThrow(/配列/)
+  it('配点付き正答形式と旧形式、未知拡張子、JSON構文エラーを扱う', () => {
+    expect(parseCsv('label,answer,points\n1,ア,2')).toEqual([{ label: '1', answer: 'ア', points: 2 }])
+    expect(() => parseCsv('label,answer,points\n1,ア,0')).toThrow(ValidationError)
+    expect(() => parseJson(JSON.stringify([{ label: '1', answer: 'ア', points: 2 }]))).not.toThrow()
     expect(() => parseFileText('{}', 'sheet.txt')).toThrow(/拡張子/)
     expect(() => parseJson('{')).toThrow(/構文/)
   })
@@ -113,7 +120,7 @@ describe('公開形式とファイル往復', () => {
     ['番号の欠落', [{ answer: 'ア' }]], ['選択値の欠落', [{ label: '1' }]],
     ['重複番号', [{ label: '1', answer: 'ア' }, { label: '1', answer: 'イ' }]],
     ['空白の選択値', [{ label: '1', answer: ' ' }]],
-    ['配点', [{ label: '1', answer: 'ア', points: 2 }]],
+    ['不正な配点', [{ label: '1', answer: 'ア', points: 0 }]],
     ['ID', [{ label: '1', answer: 'ア', id: 'q1' }]],
     ['種別', [{ label: '1', answer: 'ア', kind: 'responses' }]],
   ])('JSONの%sを拒否する', (_, records) => {
@@ -273,6 +280,14 @@ describe('labelとanswerによる読込', () => {
     expect(Object.values(keyed.answerKey).map((q) => q.points)).toEqual([2, 1, 3, 1])
     expect(Object.values(keyed.answerKey).every((q) => q.answer === null)).toBe(true)
   })
+  it('正答の配点付き読込は配点を更新し、旧形式は既存配点を保持する', () => {
+    const workspace = importDocument(importDocument(null, samplePair().responses), samplePair().answerKey)
+    const oldFormat = recordsOf(samplePair().answerKey)
+    expect(Object.values(importAnswers(workspace, 'answerKey', oldFormat).answerKey).map((q) => q.points)).toEqual([2, 1, 3, 1])
+    const withPoints = oldFormat.map((record, index) => ({ ...record, points: index + 2 }))
+    expect(Object.values(importAnswers(workspace, 'answerKey', withPoints).answerKey).map((q) => q.points)).toEqual([2, 3, 4, 5])
+    expect(() => importAnswers(workspace, 'responses', withPoints)).toThrow(ValidationError)
+  })
   it.each(['missing', 'extra', 'answer', 'duplicate', 'leadingZero'] as const)('%sは一括拒否し、元の作業を変更しない', (change) => {
     const workspace = importDocument(null, samplePair().responses)
     const before = structuredClone(workspace)
@@ -291,7 +306,7 @@ describe('labelとanswerによる読込', () => {
     expect(workspace.sheet.questions.map((q) => q.label)).toEqual(['001', '問2'])
     expect(Object.values(workspace.responses)).toEqual([null, null])
     expect(Object.values(workspace.answerKey)).toEqual([{ answer: '01', points: 1 }, { answer: null, points: 1 }])
-    expect(toAnswerFile(workspace, 'answerKey')).toEqual(records)
+    expect(toAnswerFile(workspace, 'answerKey')).toEqual(records.map((record) => ({ ...record, points: 1 })))
     expect(toAnswerFile(workspace, 'responses', true)).toEqual(records.map((record) => ({ ...record, answer: null })))
     expect(new Set(workspace.sheet.questions.map((q) => q.id)).size).toBe(2)
   })
@@ -303,8 +318,8 @@ describe('labelとanswerによる読込', () => {
     for (const kind of ['responses', 'answerKey'] as const) for (const blank of [false, true]) {
       const records = toAnswerFile(workspace, kind, blank)
       expect(JSON.parse(serializeJson(records))).toEqual(records)
-      expect(serializeCsv(records).split('\r\n')[0]).toBe('\uFEFFlabel,answer')
-      expect(records.every((record) => Object.keys(record).sort().join(',') === 'answer,label')).toBe(true)
+      expect(serializeCsv(records).split('\r\n')[0]).toBe(`\uFEFF${kind === 'answerKey' ? 'label,answer,points' : 'label,answer'}`)
+      expect(records.every((record) => Object.keys(record).sort().join(',') === (kind === 'answerKey' ? 'answer,label,points' : 'answer,label'))).toBe(true)
       if (blank) expect(records.every((record) => record.answer === null)).toBe(true)
     }
   })

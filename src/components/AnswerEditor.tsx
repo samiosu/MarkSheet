@@ -22,7 +22,7 @@ function PointsInput({ id, label, points, remaining, onChange, onInvalid }: { id
     const next = event.target.value
     const value = Number(next)
     const nextValid = /^\d+$/.test(next) && isPoints(value) && Number.isSafeInteger(remaining + value)
-    setEdit({ base: points, text: next })
+    setEdit({ base: nextValid ? value : points, text: next })
     onInvalid(id, !nextValid)
     if (nextValid) onChange(id, value)
   }} onBlur={() => {
@@ -67,7 +67,7 @@ export function AnswerEditor({ workspace, kind, busy, invalidPoints, onAnswer, o
     {kind === 'answerKey' && <div className="key-mode-banner"><Icon name="key" /><div><strong>正答を編集中</strong><span>採点の基準となる正答と配点を設定します。未設定の問題は採点対象外です。</span></div></div>}
     <div className="section-heading"><div><h2>{noun}を{kind === 'responses' ? 'マークする' : '設定する'}</h2><p>{kind === 'responses' ? '問題を見ながら、当てはまる選択肢を1つ選んでください。' : '正答は解答と別々に保存されます。'}</p></div><span className="tag tag-blue">{count} / {workspace.sheet.questions.length} 問</span></div>
     <div className="file-toolbar"><FilePicker kind={kind} onFile={onFile} disabled={busy} /><div className="export-group"><span className="muted"><Icon name="download" />出力</span><button className="button button-small" disabled={invalidPoints} aria-label={`${noun}をCSVで出力`} onClick={() => onExport(kind, 'csv')}>CSV</button><button className="button button-small" disabled={invalidPoints} aria-label={`${noun}をJSONで出力`} onClick={() => onExport(kind, 'json')}>JSON</button></div><button className="text-button clear-all" disabled={count === 0} onClick={() => onClear(kind)}>全{noun}をクリア</button></div>
-    <p className="helper">ファイルは問題番号（label）と選択値（answer）のみです。読込時は問題番号で照合し、選択肢と配点は画面の設定を使います。</p>
+    <p className="helper">{kind === 'answerKey' ? '正答のファイルには問題番号（label）・選択値（answer）・配点（points）を出力します。配点なしの旧形式も読み込めます。' : '解答のファイルは問題番号（label）と選択値（answer）のみです。'}読込時は問題番号で照合し、選択肢は画面の設定を使います。</p>
     <section className="panel mark-sheet" aria-label={`${noun}マークシート`}><div className="sheet-column-labels"><span>問題</span><span>選択肢</span><span>{kind === 'answerKey' ? '配点・解除' : '操作'}</span></div>
       {workspace.sheet.questions.map((question) => <MarkRow key={question.id} question={question} kind={kind}
         answer={kind === 'responses' ? workspace.responses[question.id] : workspace.answerKey[question.id].answer}

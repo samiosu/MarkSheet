@@ -1,6 +1,6 @@
 [
-  { "label": "1", "answer": "ア" },
-  { "label": "2", "answer": "イ" },
-  { "label": "3", "answer": "ウ" },
-  { "label": "4", "answer": null }
+  { "label": "1", "answer": "ア", "points": 2 },
+  { "label": "2", "answer": "イ", "points": 1 },
+  { "label": "3", "answer": "ウ", "points": 3 },
+  { "label": "4", "answer": null, "points": 1 }
 ]

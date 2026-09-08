@@ -33,6 +33,7 @@ export function FileImportDialog({ input, workspace, templates, onClose, onImpor
   let validationError = ''
   try {
     if (!useCurrent && !isText(title)) throw new Error('シート名を入力してください。')
+    if (kind === 'responses' && input.records.some((record) => Object.hasOwn(record, 'points'))) throw new Error('配点付きファイルは正答の読込先で使用してください。解答はlabelとanswerだけです。')
     const normalized = useCurrent ? [] : normalizeChoices(choices)
     assertAnswersMatch(input.records, useCurrent ? workspace.sheet.questions : input.records.map(({ label }) => ({ label, choices: normalized })))
   } catch (error) { validationError = errorMessage(error) }
@@ -54,7 +55,7 @@ export function FileImportDialog({ input, workspace, templates, onClose, onImpor
         <ChoiceSelector templates={templates} templateId={templateId} customChoices={customChoices} onTemplate={setTemplateId} onCustom={setCustomChoices} />
         <p className="helper">全問にこの選択肢を設定します。配点は1問1点で始め、正答タブで変更できます。</p>
       </>}
-      <table className="import-preview"><caption>読込内容{input.records.length > 5 ? '（先頭5問）' : ''}</caption><thead><tr><th scope="col">問題番号</th><th scope="col">選択値</th></tr></thead><tbody>{input.records.slice(0, 5).map((record) => <tr key={record.label}><th scope="row">{record.label}</th><td>{record.answer ?? '未設定'}</td></tr>)}</tbody></table>
+      <table className="import-preview"><caption>読込内容{input.records.length > 5 ? '（先頭5問）' : ''}</caption><thead><tr><th scope="col">問題番号</th><th scope="col">選択値</th>{input.records.some((record) => Object.hasOwn(record, 'points')) && <th scope="col">配点</th>}</tr></thead><tbody>{input.records.slice(0, 5).map((record) => <tr key={record.label}><th scope="row">{record.label}</th><td>{record.answer ?? '未設定'}</td>{input.records.some((item) => Object.hasOwn(item, 'points')) && <td>{record.points ?? '—'}</td>}</tr>)}</tbody></table>
       <p className="notice">{useCurrent ? `問題番号（label）で照合し、現在の${noun}を全問置き換えます。${kind === 'responses' ? '正答' : '解答'}・配点・選択肢・並び順は保持します。` : workspace ? `現在の「${workspace.sheet.title}」の解答・正答・設定を、新しいシートに置き換えます。自作テンプレートは保持します。` : kind === 'answerKey' ? 'この正答から、全問未回答の解答シートも作成します。' : 'この解答で新しいシートを作成します。正答は後から入力・読込できます。'}</p>
       {(validationError || submitError) && <ErrorNotice message={validationError || submitError} />}
       <div className="modal-actions"><button className="button" type="button" onClick={onClose}>キャンセル</button><button className="button button-primary" type="submit" disabled={Boolean(validationError)}>読み込みを確定</button></div>

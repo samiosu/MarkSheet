@@ -2,7 +2,8 @@ import Papa from 'papaparse'
 import type { AnswerFile, DocumentKind } from './types'
 import { ValidationError, validateAnswerFile } from './validation'
 
-export const CSV_HEADERS = ['label', 'answer']
+export const CSV_HEADERS = ['label', 'answer'] as const
+export const CSV_HEADERS_WITH_POINTS = ['label', 'answer', 'points'] as const
 
 export function parseJson(text: string): AnswerFile {
   let raw: unknown
@@ -11,7 +12,7 @@ export function parseJson(text: string): AnswerFile {
   } catch {
     throw new ValidationError([{ path: 'JSON', message: 'JSONの構文が壊れています。引用符や括弧を確認してください。' }])
   }
-  return validateAnswerFile(raw)
+  return validateAnswerFile(raw, { allowPoints: true })
 }
 
 export function parseCsv(text: string): AnswerFile {
@@ -28,17 +29,20 @@ export function parseCsv(text: string): AnswerFile {
     })))
   }
   const [headers, ...rows] = parsed.data
-  if (!headers || headers.length !== CSV_HEADERS.length || headers.some((header, i) => header !== CSV_HEADERS[i])) {
-    throw new ValidationError([{ path: 'CSVヘッダー', message: `指定の列名・順序が必要です: ${CSV_HEADERS.join(',')}` }])
+  const pointsColumn = headers?.length === CSV_HEADERS_WITH_POINTS.length && headers.every((header, i) => header === CSV_HEADERS_WITH_POINTS[i])
+  const answerColumn = headers?.length === CSV_HEADERS.length && headers.every((header, i) => header === CSV_HEADERS[i])
+  if (!headers || (!answerColumn && !pointsColumn)) {
+    throw new ValidationError([{ path: 'CSVヘッダー', message: `指定の列名・順序が必要です: ${CSV_HEADERS.join(',')} または ${CSV_HEADERS_WITH_POINTS.join(',')}` }])
   }
   if (!rows.length) throw new ValidationError([{ path: 'CSV', message: '問題を1問以上含めてください。' }])
   const records = rows.map((row, index) => {
     const path = `CSVレコード ${index + 2}`
-    if (row.length !== CSV_HEADERS.length) throw new ValidationError([{ path, message: '各レコードにはlabelとanswerの2列が必要です。' }])
-    return { label: row[0], answer: row[1] === '' ? null : row[1] }
+    if (row.length !== headers.length) throw new ValidationError([{ path, message: `各レコードには${headers.length}列が必要です。` }])
+    if (pointsColumn && !/^[1-9]\d*$/.test(row[2])) throw new ValidationError([{ path: `${path}.points`, message: '配点は正の整数にしてください。' }])
+    return { label: row[0], answer: row[1] === '' ? null : row[1], ...(pointsColumn ? { points: Number(row[2]) } : {}) }
   })
   try {
-    return validateAnswerFile(records)
+    return validateAnswerFile(records, { allowPoints: true })
   } catch (error) {
     if (error instanceof ValidationError) throw new ValidationError(error.issues.map((issue) => ({ ...issue, path: issue.path.replace(/records\[(\d+)\]/g, (_, n: string) => `CSVレコード ${Number(n) + 1}`) })))
     throw error
@@ -46,12 +50,15 @@ export function parseCsv(text: string): AnswerFile {
 }
 
 export function serializeJson(records: AnswerFile): string {
-  return JSON.stringify(validateAnswerFile(records), null, 2) + '\n'
+  return JSON.stringify(validateAnswerFile(records, { allowPoints: true }), null, 2) + '\n'
 }
 
 export function serializeCsv(records: AnswerFile): string {
-  const data = validateAnswerFile(records).map(({ label, answer }) => [label, answer ?? ''])
-  return '\uFEFF' + Papa.unparse({ fields: CSV_HEADERS, data }, { newline: '\r\n' }) + '\r\n'
+  const validated = validateAnswerFile(records, { allowPoints: true })
+  const withPoints = validated.some((record) => Object.hasOwn(record, 'points'))
+  const fields = withPoints ? CSV_HEADERS_WITH_POINTS : CSV_HEADERS
+  const data = validated.map(({ label, answer, points }) => [label, answer ?? '', ...(withPoints ? [String(points)] : [])])
+  return '\uFEFF' + Papa.unparse({ fields: [...fields], data }, { newline: '\r\n' }) + '\r\n'
 }
 
 export function parseFileText(text: string, filename: string): AnswerFile {
