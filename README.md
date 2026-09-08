@@ -195,3 +195,12 @@ UIには [`emil-design-eng`](https://github.com/emilkowalski/skills/tree/main/sk
 | `mark-sheet-requirements.md` | 添付の要件書 |
 
 標準テンプレートは `src/domain/templates.ts` で変更できます。UIレビューと検証記録は [docs/UI-REVIEW.md](docs/UI-REVIEW.md) を参照してください。
+
+## 使用した生成AIモデル
+GPT-6 Astraを使用しました。
+
+Codexに入力するための仕様書はWorkで作成し、それ以降はCodexを使用しています。
+
+Codexにおいては、Planモードを使用して仕様書から設計を行っています。
+
+設計及び初期の実装においては推論レベル『MAX』を、修正には『Medium』を使用しました。
